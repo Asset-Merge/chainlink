@@ -44,7 +44,6 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/mailbox"
 	"github.com/smartcontractkit/chainlink-common/pkg/workflows/dontime"
 	"github.com/smartcontractkit/chainlink-data-streams/llo/retirement"
-	"github.com/smartcontractkit/chainlink-data-streams/mercury"
 	"github.com/smartcontractkit/chainlink-data-streams/mercury/wsrpc"
 	"github.com/smartcontractkit/chainlink-evm/pkg/chains/legacyevm"
 	"github.com/smartcontractkit/chainlink-evm/pkg/logpoller"
@@ -388,7 +387,7 @@ func NewApplication(ctx context.Context, opts ApplicationOpts) (Application, err
 		}
 		emitterCfg.InsertBatchSize = 500
 		emitterCfg.InsertBatchWorkers = 6
-		emitterCfg.InsertBatchFlushInterval = 100 * time.Millisecond
+		emitterCfg.InsertBatchFlushInterval = cfg.Telemetry().DurableEmitterInsertBatchFlushInterval() // default 50ms, configurable via [Telemetry]
 		emitterCfg.DeleteBatchSize = 500
 		emitterCfg.DeleteBatchWorkers = 6
 		emitterCfg.DeleteBatchFlushInterval = 100 * time.Millisecond
@@ -582,7 +581,6 @@ func NewApplication(ctx context.Context, opts ApplicationOpts) (Application, err
 	var (
 		pipelineORM    = pipeline.NewORM(opts.DS, globalLogger, cfg.JobPipeline().MaxSuccessfulRuns())
 		bridgeORM      = bridges.NewORM(opts.DS)
-		mercuryORM     = mercury.NewORM(opts.DS)
 		pipelineRunner = pipeline.NewRunner(pipelineORM, bridgeORM, cfg.JobPipeline(), cfg.WebServer(), legacyEVMChains, keyStore.Eth(), keyStore.VRF(), globalLogger, restrictedHTTPClient, unrestrictedHTTPClient)
 		jobORM         = job.NewORM(opts.DS, pipelineORM, bridgeORM, keyStore, globalLogger)
 		txmORM         = txmgr.NewTxStore(opts.DS, globalLogger)
@@ -602,7 +600,16 @@ func NewApplication(ctx context.Context, opts ApplicationOpts) (Application, err
 
 	legacyEVMTelemReporter := headreporter.NewLegacyEVMTelemetryReporter(telemetryManager, globalLogger, evmChainIDs...)
 	loopTelemReporter := headreporter.NewTelemetryReporter(telemetryManager, globalLogger, relayChainInterops.GetIDToRelayerMap())
-	headReporter := headreporter.NewHeadReporterService(opts.DS, globalLogger, promReporter, legacyEVMTelemReporter, loopTelemReporter)
+	headReporters := []headreporter.HeadReporter{promReporter, legacyEVMTelemReporter, loopTelemReporter}
+	if headMetrics, metricsErr := headreporter.NewBeholderHeadMetrics(); metricsErr != nil {
+		globalLogger.Errorw("Failed to initialize head reporter Beholder metrics; skipping head metrics reporters", "err", metricsErr)
+	} else {
+		headReporters = append(headReporters, headreporter.NewEVMMetricsReporter(headMetrics, globalLogger, evmChainIDs...))
+		if relayerMetricsReporter := headreporter.NewRelayerMetricsReporter(headMetrics, globalLogger, relayChainInterops.GetIDToRelayerMap()); relayerMetricsReporter != nil {
+			headReporters = append(headReporters, relayerMetricsReporter)
+		}
+	}
+	headReporter := headreporter.NewHeadReporterService(opts.DS, globalLogger, headReporters...)
 	srvcs = append(srvcs, headReporter)
 	for _, chain := range legacyEVMChains.Slice() {
 		legacyChain, ok := chain.(legacyevm.Chain)
@@ -749,7 +756,6 @@ func NewApplication(ctx context.Context, opts ApplicationOpts) (Application, err
 				Ds:                             opts.DS,
 				JobORM:                         jobORM,
 				BridgeORM:                      bridgeORM,
-				MercuryORM:                     mercuryORM,
 				PipelineRunner:                 pipelineRunner,
 				StreamRegistry:                 streamRegistry,
 				PeerWrapper:                    peerWrapper,

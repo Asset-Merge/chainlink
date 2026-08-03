@@ -60,6 +60,31 @@ func (d *barrierDON) SendToNode(ctx context.Context, _ string, _ *jsonrpc.Reques
 	}
 }
 
+// blockedDON models a node whose websocket accepts no writes: the send to blockedAddr blocks
+// until its context is cancelled, while every other node returns immediately.
+type blockedDON struct {
+	blockedAddr string
+	mu          sync.Mutex
+	delivered   []string
+}
+
+func (d *blockedDON) SendToNode(ctx context.Context, addr string, _ *jsonrpc.Request[json.RawMessage]) error {
+	if addr == d.blockedAddr {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	d.mu.Lock()
+	d.delivered = append(d.delivered, addr)
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *blockedDON) deliveredCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.delivered)
+}
+
 var nodeOne = config.NodeConfig{
 	Name:    "node1",
 	Address: "0x1234",
@@ -187,9 +212,7 @@ func TestConfidentialRelayHandler_ForwardsBundleAtQuorum(t *testing.T) {
 	result := relaytypes.CapabilityResponseResult{Payload: "result"}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		resp, err := cb.Wait(t.Context())
 		assert.NoError(t, err)
 		assert.Equal(t, api.NoError, resp.ErrorCode)
@@ -199,7 +222,7 @@ func TestConfidentialRelayHandler_ForwardsBundleAtQuorum(t *testing.T) {
 		var bundle relaytypes.SignedCapabilityResponseBundle
 		assert.NoError(t, json.Unmarshal(*jsonResp.Result, &bundle))
 		assert.Len(t, bundle.Responses, 3, "the gateway forwards every collected signed response")
-	}()
+	})
 
 	err := h.HandleJSONRPCUserMessage(t.Context(), req, cb)
 	require.NoError(t, err)
@@ -434,9 +457,7 @@ func TestConfidentialRelayHandler_ForwardsAllDivergentResponses(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		resp, err := cb.Wait(t.Context())
 		assert.NoError(t, err)
 		assert.Equal(t, api.NoError, resp.ErrorCode)
@@ -445,7 +466,7 @@ func TestConfidentialRelayHandler_ForwardsAllDivergentResponses(t *testing.T) {
 		var bundle relaytypes.SignedCapabilityResponseBundle
 		assert.NoError(t, json.Unmarshal(*jsonResp.Result, &bundle))
 		assert.Len(t, bundle.Responses, 3, "divergent and matching responses are all forwarded untouched")
-	}()
+	})
 
 	err := h.HandleJSONRPCUserMessage(t.Context(), req, cb)
 	require.NoError(t, err)
@@ -475,13 +496,11 @@ func TestConfidentialRelayHandler_BundlerErrorReturnsFatal(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		resp, err := cb.Wait(t.Context())
 		assert.NoError(t, err)
 		assert.Equal(t, api.FatalError, resp.ErrorCode)
-	}()
+	})
 
 	require.NoError(t, h.HandleJSONRPCUserMessage(t.Context(), req, cb))
 	result := relaytypes.CapabilityResponseResult{Payload: "x"}
@@ -548,13 +567,11 @@ func TestConfidentialRelayHandler_TimeoutBelowQuorumFloorReturnsTimeout(t *testi
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		resp, err := cb.Wait(t.Context())
 		assert.NoError(t, err)
 		assert.Equal(t, api.RequestTimeoutError, resp.ErrorCode)
-	}()
+	})
 
 	require.NoError(t, h.HandleJSONRPCUserMessage(t.Context(), req, cb))
 	result := relaytypes.CapabilityResponseResult{Payload: "x"}
@@ -580,13 +597,11 @@ func TestConfidentialRelayHandler_TimeoutNoResponses(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		resp, err := cb.Wait(t.Context())
 		assert.NoError(t, err)
 		assert.Equal(t, api.RequestTimeoutError, resp.ErrorCode)
-	}()
+	})
 
 	err := h.HandleJSONRPCUserMessage(t.Context(), req, cb)
 	require.NoError(t, err)
@@ -736,9 +751,7 @@ func TestConfidentialRelayHandler_AllNodesFanOutFail(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		resp, err := cb.Wait(t.Context())
 		assert.NoError(t, err)
 		assert.Equal(t, api.FatalError, resp.ErrorCode)
@@ -746,7 +759,7 @@ func TestConfidentialRelayHandler_AllNodesFanOutFail(t *testing.T) {
 		err = json.Unmarshal(resp.RawResponse, &jsonResp)
 		assert.NoError(t, err)
 		assert.Contains(t, jsonResp.Error.Message, "failed to forward user request to nodes")
-	}()
+	})
 
 	err := h.HandleJSONRPCUserMessage(t.Context(), req, cb)
 	require.NoError(t, err)
@@ -807,9 +820,7 @@ func TestConfidentialRelayHandler_FanOutFailsWhenQuorumBecomesImpossible(t *test
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		resp, err := cb.Wait(t.Context())
 		assert.NoError(t, err)
 		assert.Equal(t, api.FatalError, resp.ErrorCode)
@@ -817,7 +828,7 @@ func TestConfidentialRelayHandler_FanOutFailsWhenQuorumBecomesImpossible(t *test
 		err = json.Unmarshal(resp.RawResponse, &jsonResp)
 		assert.NoError(t, err)
 		assert.Contains(t, jsonResp.Error.Message, "failed to forward user request to nodes")
-	}()
+	})
 
 	err := h.HandleJSONRPCUserMessage(t.Context(), req, cb)
 	require.NoError(t, err)
@@ -877,6 +888,87 @@ func TestConfidentialRelayHandler_FanOutToNodes_IsConcurrent(t *testing.T) {
 	started := don.started
 	don.mu.Unlock()
 	assert.Equal(t, 2, started)
+}
+
+func TestConfidentialRelayHandler_NodeSendTimeoutConfig(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		cfg        Config
+		wantSendMs int64
+	}{
+		{"defaults when unset", Config{}, defaultNodeSendTimeoutSec * 1000},
+		{"honours explicit value", Config{RequestTimeoutSec: 30, NodeSendTimeoutSec: 5}, 5000},
+		{"clamped to request timeout", Config{RequestTimeoutSec: 3, NodeSendTimeoutSec: 45}, 3000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			lggr := logger.Test(t)
+			methodConfig, err := json.Marshal(tc.cfg)
+			require.NoError(t, err)
+			donConfig := &config.DONConfig{DonId: "test_relay_don", F: 1, Members: []config.NodeConfig{nodeOne}}
+			limitsFactory := limits.Factory{Settings: cresettings.DefaultGetter, Logger: lggr}
+
+			h, err := NewHandler(methodConfig, donConfig, mocks.NewDON(t), lggr, clockwork.NewFakeClock(), limitsFactory)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantSendMs, h.nodeSendTimeout.Milliseconds())
+			assert.LessOrEqual(t, h.nodeSendTimeout, h.requestTimeout)
+		})
+	}
+}
+
+// A node that never drains its socket must not hold the request open. Before the per-send
+// bound, group.Wait blocked until the caller's context expired, and because the gateway only
+// reads the response callback after the handler returns, a bundle that had already reached
+// quorum was discarded in favour of a client timeout.
+func TestConfidentialRelayHandler_BlockedNodeDoesNotStallFanOut(t *testing.T) {
+	t.Parallel()
+	lggr := logger.Test(t)
+	don := &blockedDON{blockedAddr: "0x0002"}
+	donConfig := &config.DONConfig{
+		DonId: "test_relay_don",
+		F:     1,
+		Members: []config.NodeConfig{
+			{Name: "node0", Address: "0x0000"},
+			{Name: "node1", Address: "0x0001"},
+			{Name: "node2", Address: "0x0002"},
+			{Name: "node3", Address: "0x0003"},
+		},
+	}
+
+	methodConfig, err := json.Marshal(Config{RequestTimeoutSec: 30})
+	require.NoError(t, err)
+	limitsFactory := limits.Factory{Settings: cresettings.DefaultGetter, Logger: lggr}
+	h, err := NewHandler(methodConfig, donConfig, don, lggr, clockwork.NewFakeClock(), limitsFactory)
+	require.NoError(t, err)
+	// Shortened so the test exercises the bound without waiting the production default.
+	h.nodeSendTimeout = 50 * time.Millisecond
+
+	params := json.RawMessage(`{"workflow_id":"wf1"}`)
+	req := jsonrpc.Request[json.RawMessage]{
+		ID:     "req-blocked-node",
+		Method: MethodCapabilityExec,
+		Params: &params,
+	}
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		done <- h.HandleJSONRPCUserMessage(t.Context(), req, common.NewCallback())
+	}()
+
+	select {
+	case fanOutErr := <-done:
+		// Three of four nodes still received the request, so quorum remains possible and the
+		// blocked node is reported as a node error rather than a request failure.
+		require.NoError(t, fanOutErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("fan-out stalled on the blocked node instead of bounding the send")
+	}
+
+	assert.Less(t, time.Since(start), h.requestTimeout, "fan-out must return well inside the request timeout")
+	assert.Equal(t, 3, don.deliveredCount(), "healthy nodes should all receive the request")
 }
 
 func capExecSignedRespPtr(t *testing.T, id string, result relaytypes.CapabilityResponseResult, signer []byte) *jsonrpc.Response[json.RawMessage] {
