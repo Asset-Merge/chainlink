@@ -50,11 +50,10 @@ jobs:
     steps:
       - run: echo "${{github.event_name}}"
       - name: Checkout the repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
-          persist-credentials: false
-          repository: smartcontractkit/chainlink
-          ref: ${{ inputs.cl_ref }}
+          fetch-depth: 0
+          ref: ${{ inputs.cl_ref || github.sha }}
       - name: Check Merge Group Condition
         id: condition-check
         run: |
@@ -94,11 +93,10 @@ jobs:
       ccip-changes: ${{ steps.changes.outputs.ccip_changes }}
     steps:
       - name: Checkout the repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
-          persist-credentials: false
-          repository: smartcontractkit/chainlink
-          ref: ${{ inputs.cl_ref }}
+          fetch-depth: 0
+          ref: ${{ inputs.cl_ref || github.sha }}
 
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: changes
@@ -335,10 +333,9 @@ jobs:
 
       - name: Checkout the repo
         if: steps.explain.outputs.build-image == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
-          persist-credentials: false
-          repository: smartcontractkit/chainlink
+          fetch-depth: 0
           ref: ${{ env.CHAINLINK_REF }}
 
       - name: Build Chainlink Image
@@ -611,10 +608,9 @@ jobs:
           set-git-config: "true"
 
       - name: Checkout the repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
-          persist-credentials: false
-          repository: smartcontractkit/chainlink
+          fetch-depth: 0
           ref: ${{ env.CHAINLINK_REF }}
 
       - name: Set up Go for compilation
