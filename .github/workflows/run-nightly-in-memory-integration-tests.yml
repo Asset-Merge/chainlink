@@ -18,6 +18,13 @@ permissions:
   checks: read
   pull-requests: read
 
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+
 jobs:
   in-memory-tests:
     uses: ./.github/workflows/integration-in-memory-tests.yml
