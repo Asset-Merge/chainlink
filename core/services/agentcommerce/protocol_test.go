@@ -21,7 +21,7 @@ func TestRunTransactionReleasesEscrowAndAuditsLifecycle(t *testing.T) {
 	}
 
 	reputation := NewInMemoryReputation()
-	if err := reputation.Update(ctx, ReputationEvent{AgentID: sellerWallet.Address(), Delta: 10, Reason: "seed"}); err != nil {
+	if err := reputation.Update(ctx, ReputationEvent{EventID: "seed-seller", AgentID: sellerWallet.Address(), Delta: 10, Type: "seed", Reason: "seed"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	sellerScore, err := reputation.Query(ctx, sellerWallet.Address())
@@ -55,10 +55,12 @@ func TestRunTransactionReleasesEscrowAndAuditsLifecycle(t *testing.T) {
 			AllowedRails:        []string{"evm-escrow"},
 			MinSellerReputation: 5,
 		},
-		Timeout:    10 * time.Second,
-		MaxRetries: 2,
+		Timeout: 10 * time.Second,
 		ExecuteAs: func(_ context.Context, _ SignedIntent) ([]byte, map[string]string, error) {
 			return []byte("verified research deliverable"), map[string]string{"content-type": "text/plain"}, nil
+		},
+		VerifyWith: func(_ context.Context, _ SignedIntent, _ Proof) (VerificationResult, error) {
+			return VerificationResult{Verified: true, Method: "deterministic-proof", SatisfiedConditions: []string{"deterministic-proof"}, Time: time.Now().UTC()}, nil
 		},
 	}
 
@@ -132,12 +134,11 @@ func TestRunTransactionRefundsWhenVerificationFails(t *testing.T) {
 		Wallet:     buyerWallet,
 		Policy:     Policy{MaxSpend: 10, AllowedCurrencies: []string{"USDC"}, AllowedRails: []string{"x402"}},
 		Timeout:    10 * time.Second,
-		MaxRetries: 2,
 		ExecuteAs: func(_ context.Context, _ SignedIntent) ([]byte, map[string]string, error) {
 			return []byte("bad output"), nil, nil
 		},
 		VerifyWith: func(_ context.Context, _ SignedIntent, _ Proof) (VerificationResult, error) {
-			return VerificationResult{Verified: false, Method: "oracle", Reason: "oracle rejected deliverable", Time: time.Now().UTC()}, nil
+			return VerificationResult{Verified: false, Method: "oracle", SatisfiedConditions: []string{"oracle"}, Reason: "oracle rejected deliverable", Time: time.Now().UTC()}, nil
 		},
 	}
 
@@ -146,7 +147,7 @@ func TestRunTransactionRefundsWhenVerificationFails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	receipt, err := orchestrator.RunTransaction(ctx, ServiceQuery{Capability: "build", MaxPrice: Amount{Value: 10}, SettlementRail: "x402"}, ServiceRequest{Service: "build", EscrowTerms: EscrowTerms{ReleaseConditions: []string{"oracle"}, Expiration: time.Hour}}, sellerWallet)
+	receipt, err := orchestrator.RunTransaction(ctx, ServiceQuery{Capability: "build", MaxPrice: Amount{Value: 10, Currency: "USDC", Rail: "x402"}, SettlementRail: "x402"}, ServiceRequest{Service: "build", SettlementChain: "test-chain", EscrowTerms: EscrowTerms{ReleaseConditions: []string{"oracle"}, Expiration: time.Hour}}, sellerWallet)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -168,8 +169,10 @@ func TestRunTransactionRefundsWhenVerificationFails(t *testing.T) {
 func TestPolicyRejectsOverspendBeforeEscrow(t *testing.T) {
 	err := EvaluatePolicy(Policy{MaxSpend: 5}, AgentProfile{}, IntentTerms{
 		ServiceRequest: ServiceRequest{
-			Service:     "agent-research",
-			EscrowTerms: EscrowTerms{ReleaseConditions: []string{"proof"}, Expiration: time.Hour},
+			Service:         "agent-research",
+			Nonce:           "0123456789abcdef",
+			SettlementChain: "test-chain",
+			EscrowTerms:     EscrowTerms{ReleaseConditions: []string{"proof"}, Expiration: time.Hour},
 		},
 		Price:     Amount{Value: 6, Currency: "LINK", Rail: "evm-escrow"},
 		Buyer:     "buyer",
@@ -208,10 +211,10 @@ func TestDirectoryFiltersRequiredMetadataAndAuditHashChain(t *testing.T) {
 	}
 
 	audit := &AuditLog{}
-	if err := audit.Store("intent", "intent-1", map[string]string{"hash": "abc"}); err != nil {
+	if err := audit.Store(context.Background(), "intent-1:intent", "intent", "intent-1", map[string]string{"hash": "abc"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if err := audit.Store("settlement", "settle-1", map[string]string{"status": "released"}); err != nil {
+	if err := audit.Store(context.Background(), "settle-1:settlement", "settlement", "settle-1", map[string]string{"status": "released"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	entries := audit.Entries()
