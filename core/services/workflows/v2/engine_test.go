@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/smartcontractkit/tdh2/go/tdh2/tdh2easy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -23,6 +22,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
+
+	"github.com/smartcontractkit/cre-sdk-go/cre/testutils/registry"
+	"github.com/smartcontractkit/cre-sdk-go/internal_testing/capabilities/basictrigger"
+	ragetypes "github.com/smartcontractkit/libocr/ragep2p/types"
+	"github.com/smartcontractkit/tdh2/go/tdh2/tdh2easy"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/beholder"
 	"github.com/smartcontractkit/chainlink-common/pkg/beholder/beholdertest"
@@ -45,7 +49,6 @@ import (
 	sdkpb "github.com/smartcontractkit/chainlink-protos/cre/go/sdk"
 	"github.com/smartcontractkit/chainlink-protos/cre/go/values"
 	"github.com/smartcontractkit/chainlink-protos/workflows/go/events"
-
 	coreCap "github.com/smartcontractkit/chainlink/v2/core/capabilities"
 	capmocks "github.com/smartcontractkit/chainlink/v2/core/capabilities/mocks"
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/wasmtest"
@@ -58,10 +61,6 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/services/workflows/types"
 	v2 "github.com/smartcontractkit/chainlink/v2/core/services/workflows/v2"
 	"github.com/smartcontractkit/chainlink/v2/core/utils/matches"
-
-	"github.com/smartcontractkit/cre-sdk-go/cre/testutils/registry"
-	"github.com/smartcontractkit/cre-sdk-go/internal_testing/capabilities/basictrigger"
-	ragetypes "github.com/smartcontractkit/libocr/ragep2p/types"
 )
 
 const triggerID = "basic-test-trigger@1.0.0"
@@ -427,6 +426,75 @@ func TestEngine_TriggerSubscriptions(t *testing.T) {
 		servicetest.Run(t, engine)
 		require.ErrorContains(t, <-initDoneCh, "failed to register trigger id_1: failure ABC")
 	})
+}
+
+func TestEngine_TriggerRegistrationLogging(t *testing.T) {
+	t.Parallel()
+
+	var (
+		lggr, obs = logger.TestObserved(t, zapcore.InfoLevel)
+		module    = modulemocks.NewModuleV2(t)
+		capreg    = regmocks.NewCapabilitiesRegistry(t)
+	)
+
+	capreg.EXPECT().LocalNode(matches.AnyContext).Return(newNode(t), nil)
+
+	initDoneCh := make(chan error)
+	subscribedToTriggersCh := make(chan []string, 1)
+
+	cfg := defaultTestConfig(t, nil)
+	cfg.Lggr = lggr
+	cfg.Module = module
+	cfg.CapRegistry = capreg
+	cfg.Hooks = v2.LifecycleHooks{
+		OnInitialized: func(err error) {
+			initDoneCh <- err
+		},
+		OnSubscribedToTriggers: func(triggerIDs []string) {
+			subscribedToTriggersCh <- triggerIDs
+		},
+	}
+
+	payload, err := anypb.New(&emptypb.Empty{})
+	require.NoError(t, err)
+
+	subs := &sdkpb.ExecutionResult{
+		Result: &sdkpb.ExecutionResult_TriggerSubscriptions{
+			TriggerSubscriptions: &sdkpb.TriggerSubscriptionRequest{
+				Subscriptions: []*sdkpb.TriggerSubscription{
+					{Id: "cron-trigger@1.0.0", Method: "Trigger", Payload: payload},
+				},
+			},
+		},
+	}
+
+	engine, err := v2.NewEngine(cfg)
+	require.NoError(t, err)
+
+	module.EXPECT().Start()
+	module.EXPECT().Close()
+	module.EXPECT().Execute(matches.AnyContext, mock.Anything, mock.Anything).Return(subs, nil).Once()
+
+	trigger0 := capmocks.NewTriggerCapability(t)
+	capreg.EXPECT().GetTrigger(matches.AnyContext, "cron-trigger@1.0.0").Return(trigger0, nil).Once()
+	tr0Ch := make(chan capabilities.TriggerResponse)
+	trigger0.EXPECT().RegisterTrigger(matches.AnyContext, mock.Anything).Return(tr0Ch, nil).Once()
+	trigger0.EXPECT().UnregisterTrigger(matches.AnyContext, mock.Anything).Return(nil).Once()
+
+	servicetest.Run(t, engine)
+	require.NoError(t, <-initDoneCh)
+	require.Equal(t, []string{"cron-trigger@1.0.0"}, <-subscribedToTriggersCh)
+
+	entries := obs.FilterMessage("Registering trigger").All()
+	require.Len(t, entries, 1, "expected exactly one 'Registering trigger' log")
+	entry := entries[0]
+
+	assert.Equal(t, zapcore.InfoLevel, entry.Level)
+	assert.Equal(t, "cron-trigger@1.0.0", entry.ContextMap()["triggerID"])
+	assert.Equal(t, "Trigger", entry.ContextMap()["method"])
+	payloadStr, ok := entry.ContextMap()["payload"].(string)
+	require.True(t, ok, "expected payload field in log")
+	assert.Contains(t, payloadStr, "Empty")
 }
 
 func wantExecutionID(t *testing.T, workflowID, triggerEventID string, triggerIndex int) string {
@@ -1511,6 +1579,10 @@ func TestEngine_CapabilityCallTimeout(t *testing.T) {
 }
 
 func TestEngine_WASMBinary_Simple(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
 	t.Parallel()
 	cmd := "core/services/workflows/test/wasm/v2/cmd"
 	log := logger.Test(t)
@@ -1595,6 +1667,10 @@ func TestEngine_WASMBinary_Simple(t *testing.T) {
 }
 
 func TestEngine_WASMBinary_With_Config(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
 	cmd := "core/services/workflows/test/wasm/v2/cmd/with_config"
 	binaryB := wasmtest.GetTestBinary(t, cmd, false)
 
@@ -1691,6 +1767,10 @@ func TestEngine_WASMBinary_With_Config(t *testing.T) {
 }
 
 func TestSecretsFetcher_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
 	t.Parallel()
 	cmd := "core/services/workflows/test/wasm/v2/cmd/with_secrets"
 	binaryB := wasmtest.GetTestBinary(t, cmd, false)
@@ -1706,7 +1786,7 @@ func TestSecretsFetcher_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	capreg := regmocks.NewCapabilitiesRegistry(t)
-	peer := coreCap.RandomUTF8BytesWord()
+	peer := *newNode(t).PeerID
 	localRegistry := v2.CreateLocalRegistry(t, peer)
 	localNode, err := localRegistry.LocalNode(t.Context())
 	require.NoError(t, err)
@@ -1980,6 +2060,10 @@ func TestEngine_DuplicateTriggerSameConfig(t *testing.T) {
 }
 
 func TestEngine_DeduplicatesSameEventID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
 	t.Parallel()
 
 	module := modulemocks.NewModuleV2(t)
@@ -2290,6 +2374,10 @@ func TestEngine_HandleNewDON(t *testing.T) {
 // 3. Trigger a real DON update via NotifyDonSet() with ConfigVersion = 2
 // 4. Verify that the beholder logger labels are still pinned to ConfigVersion = 1
 func TestEngine_DonVersionLabelUpdatePinned(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)

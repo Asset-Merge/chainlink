@@ -18,7 +18,6 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	llodatasource "github.com/smartcontractkit/chainlink-data-streams/llo/datasource"
 	lloprotocol "github.com/smartcontractkit/chainlink-data-streams/llo/protocol"
-
 	"github.com/smartcontractkit/chainlink/v2/core/services/llo/telem"
 	"github.com/smartcontractkit/chainlink/v2/core/services/pipeline"
 	"github.com/smartcontractkit/chainlink/v2/core/services/streams"
@@ -98,6 +97,14 @@ var (
 		Subsystem: "datasource",
 		Name:      "stream_observation_error_count",
 		Help:      "Number of times we tried to observe a stream, but it failed with an error",
+	},
+		[]string{"streamID"},
+	)
+	promQuoteInvariantCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "llo",
+		Subsystem: "datasource",
+		Name:      "stream_quote_invariant_violation_count",
+		Help:      "Number of times a stream failed because its pipeline produced a quote violating Bid <= Benchmark <= Ask",
 	},
 		[]string{"streamID"},
 	)
@@ -361,6 +368,9 @@ func (d *dataSource) startObservationLoop(loopStartedCh chan struct{}) {
 							streamIDStr := strconv.FormatUint(uint64(sid), 10)
 							if errors.As(err, &MissingStreamError{}) {
 								promMissingStreamCount.WithLabelValues(streamIDStr).Inc()
+							}
+							if errors.As(err, &QuoteInvariantError{}) {
+								promQuoteInvariantCount.WithLabelValues(streamIDStr).Inc()
 							}
 							promObservationErrorCount.WithLabelValues(streamIDStr).Inc()
 							mu.Lock()

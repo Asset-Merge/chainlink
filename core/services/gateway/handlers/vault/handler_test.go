@@ -12,12 +12,13 @@ import (
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/jonboulle/clockwork"
-	p2ptypes "github.com/smartcontractkit/libocr/ragep2p/types"
-	"github.com/smartcontractkit/tdh2/go/tdh2/tdh2easy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+
+	p2ptypes "github.com/smartcontractkit/libocr/ragep2p/types"
+	"github.com/smartcontractkit/tdh2/go/tdh2/tdh2easy"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/capabilities"
 	vaultcommon "github.com/smartcontractkit/chainlink-common/pkg/capabilities/actions/vault"
@@ -30,7 +31,6 @@ import (
 	vaultcapmocks "github.com/smartcontractkit/chainlink/v2/core/capabilities/vault/mocks"
 	"github.com/smartcontractkit/chainlink/v2/core/capabilities/vault/vaulttypes"
 	"github.com/smartcontractkit/chainlink/v2/core/capabilities/vault/vaultutils"
-
 	"github.com/smartcontractkit/chainlink/v2/core/services/gateway/api"
 	"github.com/smartcontractkit/chainlink/v2/core/services/gateway/config"
 	"github.com/smartcontractkit/chainlink/v2/core/services/gateway/handlers"
@@ -982,9 +982,8 @@ func TestVaultHandler_HandleNodeMessage_SignatureValidatedResponse_RejectsUnknow
 	nodes := makeNodes(t, signers)
 	mcr := &mockCapabilitiesRegistry{F: 1, Nodes: nodes}
 	h.(*handler).aggregator = &baseAggregator{
-		capabilitiesRegistry:        mcr,
-		vaultHandlerDonID:           h.(*handler).donConfig.DonId,
-		signedResponseRequestIDGate: limits.NewGateLimiter(true),
+		capabilitiesRegistry: mcr,
+		vaultHandlerDonID:    h.(*handler).donConfig.DonId,
 	}
 
 	ocrContext, err := hex.DecodeString("000ec4f6a2ba011e909eccf64628855b848e08876a1edd938a1372a9e51adff100000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000000")
@@ -1058,9 +1057,8 @@ func TestVaultHandler_PublicKeyGet(t *testing.T) {
 	nodes := makeNodes(t, signers)
 	mcr := &mockCapabilitiesRegistry{F: 1, Nodes: nodes}
 	h.(*handler).aggregator = &baseAggregator{
-		capabilitiesRegistry:        mcr,
-		vaultHandlerDonID:           h.(*handler).donConfig.DonId,
-		signedResponseRequestIDGate: limits.NewGateLimiter(true),
+		capabilitiesRegistry: mcr,
+		vaultHandlerDonID:    h.(*handler).donConfig.DonId,
 	}
 
 	don.On("SendToNode", mock.Anything, mock.Anything, mock.Anything).Return(nil)
